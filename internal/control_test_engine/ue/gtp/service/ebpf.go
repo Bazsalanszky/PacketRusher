@@ -11,6 +11,7 @@ import (
 	gnbContext "my5G-RANTester/internal/control_test_engine/gnb/context"
 	"my5G-RANTester/internal/control_test_engine/ue/context"
 	"my5G-RANTester/internal/control_test_engine/ue/gtp/ebpfgtp"
+	log "my5G-RANTester/internal/log"
 )
 
 // ebpfTunnel is the userspace datapath with its packets short-cut in the kernel.
@@ -24,8 +25,13 @@ func startEBPF(name string, pdu *gnbContext.GnbPDUSession, ue *context.UEPDUSess
 	if err != nil {
 		return nil, err
 	}
-	t := ebpfTunnel{tunnel.(userspaceTunnel), name}
 	config, _ := userspaceConfig(pdu, ue)
+	if !ebpfgtp.Carries(ip, config) {
+		// The eBPF programs short-cut GTP-U over IPv4 only; userspace carries the rest.
+		log.Info("[UE][GTP] ", name, ": GTP-U over IPv6 to the UPF ", config.UPF, " goes through userspace, without the eBPF short-cut")
+		return tunnel, nil
+	}
+	t := ebpfTunnel{tunnel.(userspaceTunnel), name}
 	if err := ebpfgtp.Attach(name, ip, config); err != nil {
 		t.close()
 		return nil, err

@@ -15,11 +15,17 @@ import (
 // (8), its optional fields (4) and the PDU Session Container carrying the QFI (4).
 const overhead = 44
 
+// ipv6Overhead is what an IPv6 header (40) adds over an IPv4 one, for GTP-U over IPv6.
+const ipv6Overhead = 20
+
 // tunnelMTU returns the MTU of the tunnels of an N3 interface whose MTU is n3: what
 // the overhead leaves, or ue.tunnelmtu if configured, to match the UPF or a path
-// that carries less.
-func tunnelMTU(n3, configured int, ipv6 bool) (int, error) {
+// that carries less. ipv6 is for IPv6 PDU sessions, outerIPv6 for GTP-U over IPv6.
+func tunnelMTU(n3, configured int, ipv6, outerIPv6 bool) (int, error) {
 	highest := min(n3, 65535) - overhead // Loopback's MTU exceeds the largest IPv4 packet.
+	if outerIPv6 {
+		highest -= ipv6Overhead
+	}
 	lowest := 68
 	if ipv6 {
 		lowest = 1280
@@ -37,7 +43,11 @@ func tunnelMTU(n3, configured int, ipv6 bool) (int, error) {
 // SetTunnelMTU sets that MTU on the devices of a tunnel, from the interface holding
 // its N3 address source: gtp5g's own default only leaves room for 36 bytes.
 func SetTunnelMTU(source netip.Addr, configured int, ipv6 bool, devices ...netlink.Link) error {
-	addresses, err := netlink.AddrList(nil, netlink.FAMILY_V4)
+	family := netlink.FAMILY_V4
+	if !source.Unmap().Is4() {
+		family = netlink.FAMILY_V6
+	}
+	addresses, err := netlink.AddrList(nil, family)
 	if err != nil {
 		return err
 	}
@@ -49,7 +59,7 @@ func SetTunnelMTU(source netip.Addr, configured int, ipv6 bool, devices ...netli
 		if err != nil {
 			return err
 		}
-		mtu, err := tunnelMTU(n3.Attrs().MTU, configured, ipv6)
+		mtu, err := tunnelMTU(n3.Attrs().MTU, configured, ipv6, family == netlink.FAMILY_V6)
 		for _, device := range devices {
 			if err == nil {
 				err = netlink.LinkSetMTU(device, mtu)

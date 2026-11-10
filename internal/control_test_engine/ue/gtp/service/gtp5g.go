@@ -85,9 +85,21 @@ func dedicatedQER(pdu *gnbContext.GnbPDUSession) uint32 {
 	return 0
 }
 
+// gtp5gOverIPv4 refuses GTP-U over IPv6: neither gtp5g (v0.10.3) nor go-gtp5gnl
+// (v1.6.2) has an IPv6 socket, F-TEID or outer header.
+func gtp5gOverIPv4(pdu *gnbContext.GnbPDUSession, ip netip.Addr) error {
+	if upf := pdu.GetUpfAddr(); !ip.Unmap().Is4() || !upf.Unmap().Is4() {
+		return fmt.Errorf("gtp5g carries GTP-U over IPv4 only, not from %s to the UPF %s: use --tunnel-backend userspace", ip, upf)
+	}
+	return nil
+}
+
 func startGtp5g(name string, pdu *gnbContext.GnbPDUSession, ueIP string, ip netip.Addr) (datapath, error) {
 	if ueIP == "" {
 		return nil, errNoIPv6
+	}
+	if err := gtp5gOverIPv4(pdu, ip); err != nil {
+		return nil, err
 	}
 	t := &gtp5gLink{name: name, stop: make(chan bool), done: make(chan struct{})}
 	ended := make(chan error, 1)
@@ -119,6 +131,9 @@ func startGtp5g(name string, pdu *gnbContext.GnbPDUSession, ueIP string, ip neti
 
 // refresh modifies the rules in place: the device and its socket stay.
 func (t *gtp5gLink) refresh(pdu *gnbContext.GnbPDUSession, ueIP string, ip netip.Addr) error {
+	if err := gtp5gOverIPv4(pdu, ip); err != nil {
+		return err
+	}
 	return modifyRules.run(t.name, gtp.DedicatedRuleIDs(), dedicatedQER(pdu), pdu, ueIP, ip)
 }
 
@@ -145,6 +160,9 @@ type sharedRules struct {
 func startShared(dev *gtp.Device, pdu *gnbContext.GnbPDUSession, ueIP string, ip netip.Addr) (datapath, error) {
 	if dev == nil {
 		return nil, errors.New("the gNB has no shared GTP-U device")
+	}
+	if err := gtp5gOverIPv4(pdu, ip); err != nil {
+		return nil, err
 	}
 	s := &sharedRules{dev: dev, ueIP: ueIP}
 	var err error
@@ -189,6 +207,9 @@ func (s *sharedRules) addRules(pdu *gnbContext.GnbPDUSession, ip netip.Addr) (gt
 
 // refresh replaces the UE's rules: the device stays, and the UE's address on it.
 func (s *sharedRules) refresh(pdu *gnbContext.GnbPDUSession, _ string, ip netip.Addr) error {
+	if err := gtp5gOverIPv4(pdu, ip); err != nil {
+		return err
+	}
 	ids, err := s.addRules(pdu, ip)
 	if err == nil {
 		s.dev.Release(s.ids)

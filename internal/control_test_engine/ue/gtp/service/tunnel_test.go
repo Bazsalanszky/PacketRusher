@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/free5gc/nas/ie"
 	"github.com/stretchr/testify/require"
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 	"my5G-RANTester/config"
 	"my5G-RANTester/internal/common/sidf"
 	gnbContext "my5G-RANTester/internal/control_test_engine/gnb/context"
@@ -46,6 +48,10 @@ func privilegedNetwork(t *testing.T, gnbs ...string) {
 	require.NoError(t, err)
 	for _, gnb := range gnbs {
 		address, err := netlink.ParseAddr(gnb + "/32")
+		if strings.Contains(gnb, ":") { // IPv6, without duplicate address detection
+			address, err = netlink.ParseAddr(gnb + "/128")
+			address.Flags = unix.IFA_F_NODAD
+		}
 		require.NoError(t, err)
 		require.NoError(t, netlink.AddrAdd(lo, address))
 		t.Cleanup(func() { require.NoError(t, netlink.AddrDel(lo, address)) })
@@ -63,10 +69,10 @@ func message(t *testing.T, gnb, upf string, teid uint32, device *gtp.Device) gnb
 	return gnbContext.UEMessage{GNBPduSessions: [16]*gnbContext.GnbPDUSession{pdu}, GnbIp: netip.MustParseAddr(gnb), GtpDevice: device}
 }
 
-// fakeUPF listens for GTP-U on address until the test ends.
+// fakeUPF listens for GTP-U on address, IPv4 or IPv6, until the test ends.
 func fakeUPF(t *testing.T, address string) *net.UDPConn {
 	t.Helper()
-	upf, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP(address), Port: 2152})
+	upf, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(address), Port: 2152})
 	require.NoError(t, err)
 	t.Cleanup(func() { upf.Close() })
 	return upf
@@ -126,7 +132,7 @@ func echoThrough(t *testing.T, app net.Conn, upf *net.UDPConn, gnb string, uplin
 	copy(inner[ports:], packet[ports+2:ports+4])
 	copy(inner[ports+2:], packet[ports:ports+2])
 	// TS 29.281 §4.4.2 lets the UPF send from another port than 2152.
-	other, err := net.DialUDP("udp4", &net.UDPAddr{IP: upf.LocalAddr().(*net.UDPAddr).IP}, &net.UDPAddr{IP: net.ParseIP(answerTo), Port: int(peer.Port())})
+	other, err := net.DialUDP("udp", &net.UDPAddr{IP: upf.LocalAddr().(*net.UDPAddr).IP}, &net.UDPAddr{IP: net.ParseIP(answerTo), Port: int(peer.Port())})
 	require.NoError(t, err)
 	defer other.Close()
 	_, err = other.Write(userspace.Encode(reply, downlink, 9))

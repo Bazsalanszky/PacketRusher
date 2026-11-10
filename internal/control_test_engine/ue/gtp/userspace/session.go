@@ -4,7 +4,7 @@
  */
 
 // Package userspace is a GTP-U datapath that needs no kernel module: packets move
-// between one TUN device per UE and one UDP socket per gNB N3 address.
+// between one TUN device per UE and one UDP socket per gNB N3 address, IPv4 or IPv6.
 package userspace
 
 import (
@@ -72,7 +72,12 @@ func Open(name string, local netip.Addr, c Config) (*Session, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	if s.endpoint = endpoints[local]; s.endpoint == nil {
-		conn, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(local, 2152)))
+		// GTP-U over IPv4 or IPv6 (TS 29.281 §4.4), of the version of the N3 address.
+		network := "udp4"
+		if !local.Unmap().Is4() {
+			network = "udp6"
+		}
+		conn, err := net.ListenUDP(network, net.UDPAddrFromAddrPort(netip.AddrPortFrom(local, 2152)))
 		if err != nil {
 			s.tun.Close()
 			return nil, err

@@ -147,9 +147,18 @@ func removeStaleStages() {
 	}
 }
 
+// Carries reports whether the programs can short-cut the tunnel between the N3
+// address local and the UPF: they parse and build GTP-U over IPv4 only.
+func Carries(local netip.Addr, c userspace.Config) bool {
+	return local.Is4() && c.UPF.Is4()
+}
+
 // Attach short-cuts the tunnel of the TUN device name between the N3 address
 // local and the UPF. Attaching it again applies the tunnel's new identifiers.
 func Attach(name string, local netip.Addr, c userspace.Config) error {
+	if !Carries(local, c) {
+		return fmt.Errorf("no eBPF short-cut for GTP-U over IPv6, from %s to the UPF %s", local, c.UPF)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	// The interface that leads to the UPF, the loopback one when it is on this host:
