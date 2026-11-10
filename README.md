@@ -17,6 +17,7 @@ PacketRusher borrows libraries and data structures from the [free5gc project](ht
 * Simulate multiple UEs and gNodeB from a single tool
   * We tested up to 10k UEs!
 * Supports both N2 (NGAP) and N1 (NAS) interfaces for stress testing
+* N2 and N3 over IPv4, IPv6 or both
 * --pcap parameter to capture pcap of N1/N2 traffic
 * Implements main control plane procedures:
   * SUCI Concealing/Deconcealment (Null-Scheme, Profile A (X25519), Profile B (P-256))
@@ -152,6 +153,26 @@ The SMF only allocates an interface identifier: the UE sends a Router Solicitati
 ```bash
 # config.yml: "pdusessiontype: IPv4v6" under "ue:"
 sudo ./packetrusher --tunnel-backend userspace ue
+```
+
+### IPv6 and dual-stack transport (N2 and N3)
+
+The gNB's N2 and N3 addresses, `gnodeb.controlif.ip` and `gnodeb.dataif.ip`, and those of the AMFs in `amfif`
+may be IPv6, in brackets or not. For a dual-stack gNB, `ip` is its IPv4 address and `ipv6` its IPv6 one:
+[config/config-ipv6.yml](config/config-ipv6.yml) and [config/config-dual-stack.yml](config/config-dual-stack.yml)
+are examples. The transport is independent of `ue.pdusessiontype`: an IPv4 PDU session may well run over IPv6.
+
+- **N2**: the gNB reaches each AMF over SCTP from its N2 address of the AMF's IP version.
+- **N3**: the UPF may signal an IPv4 address, an IPv6 one or both (a Transport Layer Address of 32, 128 or 160
+  bits, TS 38.414 §5.1). The gNB takes the one of an IP version it has: of both, that of
+  `gnodeb.dataif.preferredfamily`, `ipv4` by default. It signals its own address of that version, or with
+  `gnodeb.dataif.advertise: all` both of its addresses, in 160 bits.
+- **GTP-U over IPv6** needs the `userspace` or `ebpf` backend; the eBPF programs short-cut GTP-U over IPv4 only,
+  so with `ebpf` a tunnel over IPv6 goes through userspace. gtp5g carries GTP-U over IPv4 only: `auto` does not
+  select it for a gNB without an IPv4 N3 address, and a dual-stack gNB uses only its IPv4 one with it.
+
+```bash
+sudo ./packetrusher --config config/config-ipv6.yml --tunnel-backend userspace ue
 ```
 
 ### Runtime UE controls and JSON scenarios
