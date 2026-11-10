@@ -55,7 +55,7 @@ func (builder *InitialContextSetupResponseBuilder) SetPDUSessionResourceSetupLis
 		pDUSessionResourceSetupItemCxtRes := ngapType.PDUSessionResourceSetupItemCxtRes{}
 
 		pDUSessionResourceSetupItemCxtRes.PDUSessionID = &ngapType.PDUSessionID{Value: pduSession.GetPduSessionId()}
-		pDUSessionResourceSetupItemCxtRes.PDUSessionResourceSetupResponseTransfer = ngapConvert.Octets(pdu_session_management.GetPDUSessionResourceSetupResponseTransfer(gnb.GetN3GnbIp(), pduSession.GetTeidDownlink(), pduSession.GetQosId()))
+		pDUSessionResourceSetupItemCxtRes.PDUSessionResourceSetupResponseTransfer = ngapConvert.Octets(pdu_session_management.GetPDUSessionResourceSetupResponseTransfer(gnb.GetDownlinkAddrs(pduSession.GetUpfAddr()), pduSession.GetTeidDownlink(), pduSession.GetQosId()))
 		PDUSessionResourceSetupListCxtRes.List = append(PDUSessionResourceSetupListCxtRes.List, pDUSessionResourceSetupItemCxtRes)
 	}
 

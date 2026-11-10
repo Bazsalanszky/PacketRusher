@@ -69,28 +69,37 @@ func (t PDUSessionType) NAS() uint8 {
 }
 
 // tunnelBackends lists the backends by order of preference for "auto", each with
-// the reason it cannot be used on this host, if any.
+// whether it carries IPv6 PDU sessions, whether it carries GTP-U over IPv6, and the
+// reason it cannot be used on this host, if any.
 var tunnelBackends = []struct {
 	name        TunnelBackend
 	ipv6        bool
+	n3IPv6      bool
 	unavailable func() error
 }{
-	{TunnelBackendEBPF, true, ebpfgtp.Load},
-	{TunnelBackendGtp5g, false, func() error { _, err := os.Stat("/sys/module/gtp5g"); return err }},
-	{TunnelBackendUserspace, true, func() error { _, err := os.Stat("/dev/net/tun"); return err }},
+	// Its eBPF programs short-cut GTP-U over IPv4 only: over IPv6 it is the userspace backend.
+	{TunnelBackendEBPF, true, true, ebpfgtp.Load},
+	{TunnelBackendGtp5g, false, false, func() error { _, err := os.Stat("/sys/module/gtp5g"); return err }},
+	{TunnelBackendUserspace, true, true, func() error { _, err := os.Stat("/dev/net/tun"); return err }},
 }
 
 // ResolveTunnelBackend returns the backend that --tunnel-backend designates: with
 // "auto" the first available one, otherwise the named one, which must be available.
 // A backend without IPv6 is not available to IPv6 PDU sessions; it carries the IPv4
-// half of IPv4v6 ones.
-func ResolveTunnelBackend(name string, sessionType PDUSessionType) (TunnelBackend, error) {
+// half of IPv4v6 ones. A backend without GTP-U over IPv6 is not available to a gNB
+// whose N3 interface has no IPv4 address; a dual-stack gNB uses its IPv4 one with it.
+func ResolveTunnelBackend(name string, sessionType PDUSessionType, n3 GnbInterface) (TunnelBackend, error) {
 	for _, backend := range tunnelBackends {
 		if name != "auto" && name != string(backend.name) {
 			continue
 		}
-		err := errors.New("it cannot carry IPv6 PDU sessions")
-		if backend.ipv6 || sessionType != PDUSessionIPv6 {
+		var err error
+		switch {
+		case !backend.ipv6 && sessionType == PDUSessionIPv6:
+			err = errors.New("it cannot carry IPv6 PDU sessions")
+		case !backend.n3IPv6 && !n3.HasIPv4():
+			err = errors.New("it cannot carry GTP-U over IPv6, and gnodeb.dataif has no IPv4 address")
+		default:
 			err = backend.unavailable()
 		}
 		if err == nil {
@@ -115,8 +124,8 @@ type Config struct {
 }
 
 type GNodeB struct {
-	ControlIF        IPv4Port         `yaml:"controlif"`
-	DataIF           IPv4Port         `yaml:"dataif"`
+	ControlIF        GnbInterface     `yaml:"controlif"`
+	DataIF           GnbInterface     `yaml:"dataif"`
 	PlmnList         PlmnList         `yaml:"plmnlist"`
 	SliceSupportList SliceSupportList `yaml:"slicesupportlist"`
 }
@@ -220,6 +229,10 @@ func readConfig(configPath string) Config {
 	err = decoder.Decode(&cfg)
 	if err != nil {
 		log.Fatal("Could not unmarshal yaml config at \"", configPath, "\". ", err.Error())
+	}
+
+	if cfg.GNodeB.ControlIF.PreferredFamily != "" || cfg.GNodeB.ControlIF.Advertise != "" {
+		log.Fatal("gnodeb.controlif: preferredfamily and advertise are for gnodeb.dataif")
 	}
 
 	if _, known := pduSessionTypes[cfg.Ue.PDUSessionType]; !known {

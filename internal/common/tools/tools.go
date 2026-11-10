@@ -58,8 +58,11 @@ func CreateGnbs(ctx context.Context, count int, cfg config.Config, wg *sync.Wait
 		}
 		// Setup retries may have consumed addresses beyond the configured start.
 		// Allocate after the settled endpoints, preserving the configured ports.
-		cfg.GNodeB.ControlIF.AddrPort = netip.AddrPortFrom(created.GetGnbIpPort().Addr().Next(), cfg.GNodeB.ControlIF.Port())
-		cfg.GNodeB.DataIF.AddrPort = netip.AddrPortFrom(created.GetN3GnbIp().Next(), cfg.GNodeB.DataIF.Port())
+		// A dual-stack gNB's IPv6 addresses advance alongside its IPv4 ones.
+		n2, n3 := created.ControlInterface().WithNextAddr(), created.DataInterface().WithNextAddr()
+		cfg.GNodeB.ControlIF.AddrPort = netip.AddrPortFrom(n2.Addr(), cfg.GNodeB.ControlIF.Port())
+		cfg.GNodeB.DataIF.AddrPort = netip.AddrPortFrom(n3.Addr(), cfg.GNodeB.DataIF.Port())
+		cfg.GNodeB.ControlIF.IPv6, cfg.GNodeB.DataIF.IPv6 = n2.IPv6, n3.IPv6
 	}
 	return gnbs, nil
 }

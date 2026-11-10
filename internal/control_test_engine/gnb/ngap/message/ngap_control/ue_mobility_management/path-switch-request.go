@@ -7,7 +7,6 @@ package ue_mobility_management
 
 import (
 	"my5G-RANTester/internal/control_test_engine/gnb/context"
-	"net/netip"
 
 	ngap "github.com/free5gc/ngap/message"
 	log "my5G-RANTester/internal/log"
@@ -24,7 +23,7 @@ func PathSwitchRequest(gnb *context.GNBContext, ue *context.GNBUe) ([]byte, erro
 	return NewPathSwitchRequestBuilder().
 		SetSourceAmfUeNgapId(ue.GetAmfUeId()).
 		SetRanUeNgapId(ue.GetRanUeId()).
-		PathSwitchRequestTransfer(gnb.GetN3GnbIp(), ue.GetPduSessions()).
+		PathSwitchRequestTransfer(gnb, ue.GetPduSessions()).
 		SetUserLocation(gnb).
 		SetUserSecurityCapabilities(ue.GetUESecurityCapabilities()).
 		Build()
@@ -54,14 +53,16 @@ func (builder *PathSwitchRequestBuilder) SetUserSecurityCapabilities(userSecurit
 	return builder
 }
 
-func (builder *PathSwitchRequestBuilder) PathSwitchRequestTransfer(gnbN3Ip netip.Addr, pduSessions [16]*context.GnbPDUSession) *PathSwitchRequestBuilder {
+// PathSwitchRequestTransfer signals the gNB's DL tunnel of each PDU session, at its N3
+// address towards the session's UPF.
+func (builder *PathSwitchRequestBuilder) PathSwitchRequestTransfer(gnb *context.GNBContext, pduSessions [16]*context.GnbPDUSession) *PathSwitchRequestBuilder {
 	list := &ngapType.PDUSessionResourceToBeSwitchedDLList{}
 	for _, session := range pduSessions {
 		if session == nil {
 			continue
 		}
 		transfer := &ngapType.PathSwitchRequestTransfer{
-			DLNGUUPTNLInformation: ngapConvert.UPTransport(gnbN3Ip, session.GetTeidDownlink()),
+			DLNGUUPTNLInformation: ngapConvert.GTPTunnel(session.GetTeidDownlink(), gnb.GetDownlinkAddrs(session.GetUpfAddr())...),
 			QosFlowAcceptedList:   &ngapType.QosFlowAcceptedList{List: []ngapType.QosFlowAcceptedItem{{QosFlowIdentifier: &ngapType.QosFlowIdentifier{Value: session.GetQosId()}}}},
 		}
 		encoded, err := ngapConvert.Marshal(transfer)

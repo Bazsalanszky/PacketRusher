@@ -7,6 +7,7 @@ package context
 
 import (
 	"fmt"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 
@@ -335,6 +336,12 @@ func (pduSession *GnbPDUSession) GetUpfIp() string {
 	pduSession.tunnelMu.RLock()
 	defer pduSession.tunnelMu.RUnlock()
 	return pduSession.upfIp
+}
+
+// GetUpfAddr is the UPF's N3 address, invalid if the session has none.
+func (pduSession *GnbPDUSession) GetUpfAddr() netip.Addr {
+	addr, _ := netip.ParseAddr(pduSession.GetUpfIp())
+	return addr
 }
 
 func (pduSession *GnbPDUSession) SetUpfIp(upfIp string) {

@@ -224,10 +224,15 @@ func pduSessionResourceSetupRequest(t *testing.T, ue *context.GNBUe, sst, sd []b
 }
 
 func pduSessionResourceSetupRequestWith(t *testing.T, ue *context.GNBUe, sst, sd []byte, withUlTunnel bool) *ngapmsg.PDUSessionResourceSetupRequest {
+	return pduSessionResourceSetupRequestUL(t, ue, sst, sd, withUlTunnel, ngapConvert.UPTransport(netip.MustParseAddr("10.0.0.1"), 1))
+}
+
+// pduSessionResourceSetupRequestUL is pduSessionResourceSetupRequestWith the UL tunnel ul.
+func pduSessionResourceSetupRequestUL(t *testing.T, ue *context.GNBUe, sst, sd []byte, withUlTunnel bool, ul *ngapType.UPTransportLayerInformation) *ngapmsg.PDUSessionResourceSetupRequest {
 	t.Helper()
 	transfer := &ngapType.PDUSessionResourceSetupRequestTransfer{
 		ProtocolIEs: &ngapType.ProtocolIEContainerPDUSessionResourceSetupRequestTransferIEs{List: []ngapType.PDUSessionResourceSetupRequestTransferIEs{
-			{ULNGUUPTNLInformation: ngapConvert.UPTransport(netip.MustParseAddr("10.0.0.1"), 1)},
+			{ULNGUUPTNLInformation: ul},
 			{PDUSessionType: &ngapType.PDUSessionType{Value: ngapType.PDUSessionTypePresentIpv4}},
 			{QosFlowSetupRequestList: &ngapType.QosFlowSetupRequestList{List: []ngapType.QosFlowSetupRequestItem{{
 				QosFlowIdentifier: &ngapType.QosFlowIdentifier{Value: 1},

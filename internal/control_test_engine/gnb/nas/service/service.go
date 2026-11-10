@@ -53,7 +53,8 @@ func gnbListen(gnb *context.GNBContext) {
 			ue.SetGnbTx(message.GNBTx)
 
 			// We enable the new PDU Session handed over to us
-			msg := context.UEMessage{GNBPduSessions: ue.GetPduSessions(), GnbIp: gnb.GetN3GnbIp(), GtpDevice: gnb.GetGtpDevice()}
+			pduSessions := ue.GetPduSessions()
+			msg := context.UEMessage{GNBPduSessions: pduSessions, GnbIp: gnb.GetN3LocalForSession(pduSessions[0]), GtpDevice: gnb.GetGtpDevice()}
 			sender.SendMessageToUe(ue, msg)
 
 			ue.SetStateReady()

@@ -12,8 +12,8 @@ import (
 func GenerateDefaultConf(controlIF netip.AddrPort, dataIF netip.AddrPort, amfs []*config.AMF) config.Config {
 	return config.Config{
 		GNodeB: config.GNodeB{
-			ControlIF: config.IPv4Port{AddrPort: controlIF},
-			DataIF:    config.IPv4Port{AddrPort: dataIF},
+			ControlIF: config.GnbInterface{IPv4Port: config.IPv4Port{AddrPort: controlIF}},
+			DataIF:    config.GnbInterface{IPv4Port: config.IPv4Port{AddrPort: dataIF}},
 			PlmnList: config.PlmnList{
 				Mcc:   "999",
 				Mnc:   "70",

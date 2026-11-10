@@ -98,7 +98,7 @@ func GetHandoverRequestAcknowledgeTransfer(gnb *context.GNBContext, pduSession *
 }
 
 func buildHandoverRequestAcknowledgeTransfer(gnb *context.GNBContext, pduSession *context.GnbPDUSession) (data ngapType.HandoverRequestAcknowledgeTransfer) {
-	data.DLNGUUPTNLInformation = ngapConvert.UPTransport(gnb.GetN3GnbIp(), pduSession.GetTeidDownlink())
+	data.DLNGUUPTNLInformation = ngapConvert.GTPTunnel(pduSession.GetTeidDownlink(), gnb.GetDownlinkAddrs(pduSession.GetUpfAddr())...)
 	data.QosFlowSetupResponseList = &ngapType.QosFlowListWithDataForwarding{List: []ngapType.QosFlowItemWithDataForwarding{{QosFlowIdentifier: &ngapType.QosFlowIdentifier{Value: 1}}}}
 	return data
 }

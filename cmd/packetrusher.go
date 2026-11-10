@@ -69,8 +69,8 @@ func newApp() *cli.App {
 					log.Info("[TESTER] Starting test function: ", name)
 					log.Info("[TESTER][UE] Number of UEs: ", 1)
 					log.Info("[TESTER][UE] disableTunnel is ", !tunnelEnabled)
-					log.Info("[TESTER][GNB] Control interface IP/Port: ", cfg.GNodeB.ControlIF.AddrPort, "~")
-					log.Info("[TESTER][GNB] Data interface IP/Port: ", cfg.GNodeB.DataIF.AddrPort)
+					log.Info("[TESTER][GNB] Control interface IP/Port: ", cfg.GNodeB.ControlIF, "~")
+					log.Info("[TESTER][GNB] Data interface IP/Port: ", cfg.GNodeB.DataIF)
 					for _, amf := range cfg.AMFs {
 						log.Info("[TESTER][AMF] AMF IP/Port: ", amf.AddrPort)
 					}
@@ -94,8 +94,8 @@ func newApp() *cli.App {
 					log.Info("---------------------------------------")
 					log.Info("[TESTER] Starting test function: ", name)
 					log.Info("[TESTER][GNB] Number of GNBs: ", 1)
-					log.Info("[TESTER][GNB] Control interface IP/Port: ", cfg.GNodeB.ControlIF.AddrPort, "~")
-					log.Info("[TESTER][GNB] Data interface IP/Port: ", cfg.GNodeB.DataIF.AddrPort)
+					log.Info("[TESTER][GNB] Control interface IP/Port: ", cfg.GNodeB.ControlIF, "~")
+					log.Info("[TESTER][GNB] Data interface IP/Port: ", cfg.GNodeB.DataIF)
 					for _, amf := range cfg.AMFs {
 						log.Info("[TESTER][AMF] AMF IP/Port: ", amf.AddrPort)
 					}
@@ -147,8 +147,8 @@ func newApp() *cli.App {
 					log.Info("---------------------------------------")
 					log.Info("[TESTER] Starting test function: ", name)
 					log.Info("[TESTER][UE] Number of UEs: ", numUes)
-					log.Info("[TESTER][GNB] gNodeB control interface IP/Port: ", cfg.GNodeB.ControlIF.AddrPort, "~")
-					log.Info("[TESTER][GNB] gNodeB data interface IP/Port: ", cfg.GNodeB.DataIF.AddrPort)
+					log.Info("[TESTER][GNB] gNodeB control interface IP/Port: ", cfg.GNodeB.ControlIF, "~")
+					log.Info("[TESTER][GNB] gNodeB data interface IP/Port: ", cfg.GNodeB.DataIF)
 					for _, amf := range cfg.AMFs {
 						log.Info("[TESTER][AMF] AMF IP/Port: ", amf.AddrPort)
 					}
@@ -250,8 +250,8 @@ func newApp() *cli.App {
 					log.Info("---------------------------------------")
 					log.Warn("[TESTER] Starting test function: ", name)
 					log.Warn("[TESTER][UE] Number of Requests per second: ", numRqs)
-					log.Info("[TESTER][GNB] gNodeB control interface IP/Port: ", cfg.GNodeB.ControlIF.AddrPort)
-					log.Info("[TESTER][GNB] gNodeB data interface IP/Port: ", cfg.GNodeB.DataIF.AddrPort)
+					log.Info("[TESTER][GNB] gNodeB control interface IP/Port: ", cfg.GNodeB.ControlIF)
+					log.Info("[TESTER][GNB] gNodeB data interface IP/Port: ", cfg.GNodeB.DataIF)
 					for _, amf := range cfg.AMFs {
 						log.Info("[TESTER][AMF] AMF IP/Port: ", amf.AddrPort)
 					}
@@ -279,8 +279,8 @@ func newApp() *cli.App {
 					log.Info("---------------------------------------")
 					log.Warn("[TESTER] Starting test function: ", name)
 					log.Warn("[TESTER][UE] Interval of test: ", time, " seconds")
-					log.Info("[TESTER][GNB] Control interface IP/Port: ", cfg.GNodeB.ControlIF.AddrPort)
-					log.Info("[TESTER][GNB] Data interface IP/Port: ", cfg.GNodeB.DataIF.AddrPort)
+					log.Info("[TESTER][GNB] Control interface IP/Port: ", cfg.GNodeB.ControlIF)
+					log.Info("[TESTER][GNB] Data interface IP/Port: ", cfg.GNodeB.DataIF)
 					for _, amf := range cfg.AMFs {
 						log.Info("[TESTER][AMF] AMF IP/Port: ", amf.AddrPort)
 					}
@@ -323,7 +323,7 @@ func resolveTunnelBackend(c *cli.Context, cfg config.Config, tunnel bool) (confi
 	if !tunnel {
 		return "", nil
 	}
-	return config.ResolveTunnelBackend(c.String("tunnel-backend"), cfg.Ue.PDUSessionType)
+	return config.ResolveTunnelBackend(c.String("tunnel-backend"), cfg.Ue.PDUSessionType, cfg.GNodeB.DataIF)
 }
 
 func main() {

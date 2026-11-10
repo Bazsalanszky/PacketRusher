@@ -199,13 +199,17 @@ func HandlerInitialContextSetupRequest(gnb *context.GNBContext, message *ngapmsg
 				case ngapType.ProtocolIEIDULNGUUPTNLInformation:
 					uLNGUUPTNLInformation := ie.ULNGUUPTNLInformation
 
-					gtpTunnel, err = ngapConvert.Tunnel(uLNGUUPTNLInformation)
+					tunnel, err := ngapConvert.Tunnel(uLNGUUPTNLInformation)
 					if err != nil {
 						log.Error("[GNB][NGAP] Invalid uplink tunnel: ", err)
 						continue
 					}
-					upfIp, _ = ngapConvert.IPAddressToString(gtpTunnel.TransportLayerAddress)
-					teidUplink = gtpTunnel.GTPTEID.Value
+					upf, err := gnb.SelectUpfAddress(tunnel.TransportLayerAddress)
+					if err != nil {
+						log.Error("[GNB][NGAP] Invalid uplink tunnel address: ", err)
+						continue
+					}
+					gtpTunnel, upfIp, teidUplink = tunnel, upf.String(), tunnel.GTPTEID.Value
 				}
 			}
 
@@ -225,7 +229,8 @@ func HandlerInitialContextSetupRequest(gnb *context.GNBContext, message *ngapmsg
 			}
 		}
 
-		msg := context.UEMessage{GNBPduSessions: ue.GetPduSessions(), GnbIp: gnb.GetN3GnbIp(), GtpDevice: gnb.GetGtpDevice()}
+		pduSessions := ue.GetPduSessions()
+		msg := context.UEMessage{GNBPduSessions: pduSessions, GnbIp: gnb.GetN3LocalForSession(pduSessions[0]), GtpDevice: gnb.GetGtpDevice()}
 		sender.SendMessageToUe(ue, msg)
 	}
 
@@ -275,7 +280,7 @@ func HandlerPduSessionResourceSetupRequest(gnb *context.GNBContext, message *nga
 	for _, item := range pDUSessionResourceSetupList.List {
 		var pduSessionId int64
 		var ulTeid uint32
-		var upfAddress []byte
+		var upfAddress netip.Addr
 		var messageNas []byte
 		var sst string
 		var sd string
@@ -325,8 +330,13 @@ func HandlerPduSessionResourceSetupRequest(gnb *context.GNBContext, message *nga
 							log.Error("[GNB][NGAP] Invalid uplink tunnel: ", err)
 							continue
 						}
+						upf, err := gnb.SelectUpfAddress(tunnel.TransportLayerAddress)
+						if err != nil {
+							log.Error("[GNB][NGAP] Invalid uplink tunnel address: ", err)
+							continue
+						}
 						ulTeid = binary.BigEndian.Uint32(tunnel.GTPTEID.Value)
-						upfAddress = tunnel.TransportLayerAddress.Value.Bytes
+						upfAddress = upf
 
 					case ngapType.ProtocolIEIDQosFlowSetupRequestList:
 						for _, itemsQos := range ies.QosFlowSetupRequestList.List {
@@ -362,14 +372,14 @@ func HandlerPduSessionResourceSetupRequest(gnb *context.GNBContext, message *nga
 			continue
 		}
 
-		// A transfer that failed to decode, or carried no UL tunnel, leaves upfAddress
-		// empty; indexing it would panic and end the process just as the Fatal above did.
-		if len(upfAddress) < 4 {
+		// A transfer that failed to decode, or carried no usable UL tunnel, leaves
+		// upfAddress invalid.
+		if !upfAddress.IsValid() {
 			log.Error("[GNB][NGAP] No usable UL NG-U UP TNL Information for PDU Session ", pduSessionId, ", skipping")
 			continue
 		}
 
-		upfIp := fmt.Sprintf("%d.%d.%d.%d", upfAddress[0], upfAddress[1], upfAddress[2], upfAddress[3])
+		upfIp := upfAddress.String()
 
 		// create PDU Session for GNB UE.
 		pduSession, err := ue.CreatePduSession(pduSessionId, upfIp, sst, sd, pduSType, qosId, priArp, fiveQi, ulTeid, gnb.GetUeTeid(ue))
@@ -400,7 +410,7 @@ func HandlerPduSessionResourceSetupRequest(gnb *context.GNBContext, message *nga
 		log.Info("[GNB][NGAP][UE] Downlink Teid: ", pduSession.GetTeidDownlink())
 		log.Info("[GNB][NGAP][UE] Non-Dynamic-5QI: ", pduSession.GetFiveQI())
 		log.Info("[GNB][NGAP][UE] Priority Level ARP: ", pduSession.GetPriorityARP())
-		log.Info("[GNB][NGAP][UE] UPF Address: ", fmt.Sprintf("%d.%d.%d.%d", upfAddress[0], upfAddress[1], upfAddress[2], upfAddress[3]), " :2152")
+		log.Info("[GNB][NGAP][UE] UPF Address: ", netip.AddrPortFrom(upfAddress, 2152))
 
 		// send NAS message to UE if present.
 		if messageNas != nil {
@@ -409,7 +419,7 @@ func HandlerPduSessionResourceSetupRequest(gnb *context.GNBContext, message *nga
 
 		var pduSessions [16]*context.GnbPDUSession
 		pduSessions[0] = pduSession
-		msg := context.UEMessage{GnbIp: gnb.GetN3GnbIp(), GtpDevice: gnb.GetGtpDevice(), GNBPduSessions: pduSessions}
+		msg := context.UEMessage{GnbIp: gnb.GetN3LocalForSession(pduSession), GtpDevice: gnb.GetGtpDevice(), GNBPduSessions: pduSessions}
 
 		sender.SendMessageToUe(ue, msg)
 	}
@@ -726,19 +736,18 @@ func HandlerAmfConfigurationUpdate(amf *context.GNBAmf, gnb *context.GNBContext,
 
 		toAddList := valueMessage.AMFTNLAssociationToAddList
 		for _, toAddItem := range toAddList.List {
-			ipv4String, _ := ngapConvert.IPAddressToString(ngapConvert.CPAddress(toAddItem.AMFTNLAssociationAddress))
-			if ipv4String == "" {
-				// ignore AMF that does not have IPv4 address
+			amfAddrPort, ok := amfTNLAddress(gnb, toAddItem.AMFTNLAssociationAddress)
+			if !ok {
+				// ignore AMF that has no address of an IP version of the gNB's N2
 				continue
 			}
-			ipv4Port := netip.AddrPortFrom(netip.MustParseAddr(ipv4String), 38412) // with default sctp port
 
-			if oldAmf := gnb.FindGnbAmfByIpPort(ipv4Port); oldAmf != nil {
+			if oldAmf := gnb.FindGnbAmfByIpPort(amfAddrPort); oldAmf != nil {
 				log.Info("[GNB] SCTP/NGAP service exists")
 				continue
 			}
 
-			newAmf := gnb.NewGnBAmf(ipv4Port)
+			newAmf := gnb.NewGnBAmf(amfAddrPort)
 			newAmf.SetAmfName(amfName)
 			newAmf.SetAmfCapacity(amfCapacity)
 			newAmf.SetRegionId(amfRegionId)
@@ -749,7 +758,7 @@ func HandlerAmfConfigurationUpdate(amf *context.GNBAmf, gnb *context.GNBContext,
 
 			// start communication with AMF(SCTP).
 			if err := InitConn(newAmf, gnb); err != nil {
-				log.Error("[GNB][AMF] Failed to connect to AMF ", ipv4Port, ": ", err)
+				log.Error("[GNB][AMF] Failed to connect to AMF ", amfAddrPort, ": ", err)
 				gnb.RemoveGnbAmf(newAmf)
 				continue
 			} else {
@@ -766,14 +775,13 @@ func HandlerAmfConfigurationUpdate(amf *context.GNBAmf, gnb *context.GNBContext,
 
 		toRemoveList := valueMessage.AMFTNLAssociationToRemoveList
 		for _, toRemoveItem := range toRemoveList.List {
-			ipv4String, _ := ngapConvert.IPAddressToString(ngapConvert.CPAddress(toRemoveItem.AMFTNLAssociationAddress))
-			if ipv4String == "" {
-				// ignore AMF that does not have IPv4 address
+			amfAddrPort, ok := amfTNLAddress(gnb, toRemoveItem.AMFTNLAssociationAddress)
+			if !ok {
+				// ignore AMF that has no address of an IP version of the gNB's N2
 				continue
 			}
-			ipv4Port := netip.AddrPortFrom(netip.MustParseAddr(ipv4String), 38412) // with default sctp port
 
-			oldAmf := gnb.FindGnbAmfByIpPort(ipv4Port)
+			oldAmf := gnb.FindGnbAmfByIpPort(amfAddrPort)
 			if oldAmf == nil {
 				continue
 			}
@@ -787,14 +795,13 @@ func HandlerAmfConfigurationUpdate(amf *context.GNBAmf, gnb *context.GNBContext,
 
 		toUpdateList := valueMessage.AMFTNLAssociationToUpdateList
 		for _, toUpdateItem := range toUpdateList.List {
-			ipv4String, _ := ngapConvert.IPAddressToString(ngapConvert.CPAddress(toUpdateItem.AMFTNLAssociationAddress))
-			if ipv4String == "" {
-				// ignore AMF that does not have IPv4 address
+			amfAddrPort, ok := amfTNLAddress(gnb, toUpdateItem.AMFTNLAssociationAddress)
+			if !ok {
+				// ignore AMF that has no address of an IP version of the gNB's N2
 				continue
 			}
-			ipv4Port := netip.AddrPortFrom(netip.MustParseAddr(ipv4String), 38412) // with default sctp port
 
-			oldAmf := gnb.FindGnbAmfByIpPort(ipv4Port)
+			oldAmf := gnb.FindGnbAmfByIpPort(amfAddrPort)
 			if oldAmf == nil {
 				continue
 			}
@@ -969,22 +976,47 @@ func HandlerPathSwitchRequestAcknowledge(gnb *context.GNBContext, message *ngapm
 				log.Error("[GNB][NGAP] Invalid path switch tunnel: ", err)
 				continue
 			}
-			upfIpv4, _ := ngapConvert.IPAddressToString(gtpTunnel.TransportLayerAddress)
+			upf, err := gnb.SelectUpfAddress(gtpTunnel.TransportLayerAddress)
+			if err != nil {
+				log.Error("[GNB][NGAP] Invalid path switch tunnel address: ", err)
+				continue
+			}
 			teidUplink := gtpTunnel.GTPTEID.Value
 
 			// Set new Teid Uplink received in PathSwitchRequestAcknowledge
 			pduSession.SetTeidUplink(binary.BigEndian.Uint32(teidUplink))
-			pduSession.SetUpfIp(upfIpv4)
+			pduSession.SetUpfIp(upf.String())
 		}
 		var pduSessions [16]*context.GnbPDUSession
 		pduSessions[0] = pduSession
 
-		msg := context.UEMessage{GNBPduSessions: pduSessions, GnbIp: gnb.GetN3GnbIp(), GtpDevice: gnb.GetGtpDevice()}
+		msg := context.UEMessage{GNBPduSessions: pduSessions, GnbIp: gnb.GetN3LocalForSession(pduSession), GtpDevice: gnb.GetGtpDevice()}
 
 		sender.SendMessageToUe(ue, msg)
 	}
 
 	log.Info("[GNB] Handover completed successfully for UE ", ue.GetRanUeId())
+}
+
+// amfTNLAddress returns the address and the default SCTP port of an AMF TNL
+// association, which may be IPv4, IPv6 or both (TS 38.414 §5.1): of both, the
+// address of the IP version of the gNB's N2 address, else the other if the gNB has it.
+func amfTNLAddress(gnb *context.GNBContext, address *ngapType.CPTransportLayerInformation) (netip.AddrPort, bool) {
+	v4, v6, err := ngapConvert.TransportAddresses(ngapConvert.CPAddress(address))
+	if err != nil {
+		log.Warn("[GNB][NGAP] Invalid AMF TNL association address: ", err)
+		return netip.AddrPort{}, false
+	}
+	candidates := []netip.Addr{v4, v6}
+	if !gnb.GetGnbIpPort().Addr().Is4() {
+		candidates = []netip.Addr{v6, v4}
+	}
+	for _, amf := range candidates {
+		if _, err := gnb.GetN2LocalFor(amf); amf.IsValid() && err == nil {
+			return netip.AddrPortFrom(amf, 38412), true // with default sctp port
+		}
+	}
+	return netip.AddrPort{}, false
 }
 
 func HandlerHandoverRequest(amf *context.GNBAmf, gnb *context.GNBContext, message *ngapmsg.HandoverRequest) {
@@ -1117,13 +1149,17 @@ func HandlerHandoverRequest(amf *context.GNBAmf, gnb *context.GNBContext, messag
 			case ngapType.ProtocolIEIDULNGUUPTNLInformation:
 				uLNGUUPTNLInformation := ie.ULNGUUPTNLInformation
 
-				gtpTunnel, err = ngapConvert.Tunnel(uLNGUUPTNLInformation)
+				tunnel, err := ngapConvert.Tunnel(uLNGUUPTNLInformation)
 				if err != nil {
 					log.Error("[GNB][NGAP] Invalid uplink tunnel: ", err)
 					continue
 				}
-				upfIp, _ = ngapConvert.IPAddressToString(gtpTunnel.TransportLayerAddress)
-				teidUplink = gtpTunnel.GTPTEID.Value
+				upf, err := gnb.SelectUpfAddress(tunnel.TransportLayerAddress)
+				if err != nil {
+					log.Error("[GNB][NGAP] Invalid uplink tunnel address: ", err)
+					continue
+				}
+				gtpTunnel, upfIp, teidUplink = tunnel, upf.String(), tunnel.GTPTEID.Value
 			}
 		}
 

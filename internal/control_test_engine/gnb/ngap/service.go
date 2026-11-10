@@ -48,31 +48,50 @@ func InitConn(amf *context.GNBAmf, gnb *context.GNBContext) error {
 	return nil
 }
 
+// sctpEndpoints returns the socket type and the addresses of an association from
+// the gNB's N2 address local to the AMF's remote. Both are of the AMF's IP version,
+// since SCTP cannot bind an address of one version and reach the other; GetN2LocalFor
+// picks local so. netip.AddrPort brackets an IPv6 address, as SCTP expects.
+func sctpEndpoints(local, remote netip.AddrPort) (network string, loc, rem *sctp.SCTPAddr, err error) {
+	local, remote = netip.AddrPortFrom(local.Addr().Unmap(), local.Port()), netip.AddrPortFrom(remote.Addr().Unmap(), remote.Port())
+	if local.Addr().Is4() != remote.Addr().Is4() {
+		return "", nil, nil, fmt.Errorf("the N2 address %s and the AMF address %s are of different IP versions", local, remote)
+	}
+	network = "sctp4"
+	if remote.Addr().Is6() {
+		network = "sctp6"
+	}
+	if rem, err = sctp.ResolveSCTPAddr(network, remote.String()); err != nil {
+		return "", nil, nil, fmt.Errorf("remote address %s: %w", remote, err)
+	}
+	if loc, err = sctp.ResolveSCTPAddr(network, local.String()); err != nil {
+		return "", nil, nil, fmt.Errorf("local address %s: %w", local, err)
+	}
+	return network, loc, rem, nil
+}
+
 func dialAmf(amf *context.GNBAmf, gnb *context.GNBContext) error {
 
 	// check AMF IP and AMF port.
-	remote := amf.GetAmfIpPort().String()
-	gnbAddrPort := gnb.GetGnbIpPort()
+	amfAddrPort := amf.GetAmfIpPort()
+	gnbAddrPort, err := gnb.GetN2LocalFor(amfAddrPort.Addr())
+	if err != nil {
+		log.Error("[GNB][SCTP] ", err)
+		return err
+	}
 	port := amf.GetLocalPort()
 	if port == 0 {
 		port = gnbAddrPort.Port() + uint16(ConnCount.Add(1)-1)
 		amf.SetLocalPort(port)
 	}
 	DialCount.Add(1)
-	local := netip.AddrPortFrom(gnbAddrPort.Addr(), port).String()
 
-	log.Info("[GNB][SCTP] Initializing connection: local=", local, " remote=", remote)
-
-	rem, err := sctp.ResolveSCTPAddr("sctp", remote)
+	network, loc, rem, err := sctpEndpoints(netip.AddrPortFrom(gnbAddrPort.Addr(), port), amfAddrPort)
 	if err != nil {
-		log.Error("[GNB][SCTP] Failed to resolve remote address: ", err)
+		log.Error("[GNB][SCTP] ", err)
 		return err
 	}
-	loc, err := sctp.ResolveSCTPAddr("sctp", local)
-	if err != nil {
-		log.Error("[GNB][SCTP] Failed to resolve local address: ", err)
-		return err
-	}
+	log.Info("[GNB][SCTP] Initializing connection: local=", loc, " remote=", rem)
 
 	log.Info("[GNB][SCTP] Attempting SCTP dial...")
 
@@ -87,7 +106,7 @@ func dialAmf(amf *context.GNBAmf, gnb *context.GNBContext) error {
 
 	go func() {
 		conn, err := sctp.DialSCTPExt(
-			"sctp",
+			network,
 			loc,
 			rem,
 			// One INIT retransmission, given 1 s: a dial to an AMF that does not answer

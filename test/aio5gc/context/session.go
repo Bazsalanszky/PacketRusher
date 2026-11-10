@@ -19,6 +19,7 @@ type SessionContext struct {
 	sessionsRules   []*models.Pcf_SMPolCtrl_SessionRule
 	lastAllocatedIP net.IP
 	n3              net.IP
+	n3Addrs         []netip.Addr // the UPF's N3 addresses, which SetN3 may make IPv6 or both
 	ipMtx           sync.Mutex
 }
 
@@ -65,6 +66,26 @@ func (s *SessionContext) NewSessionContext() {
 
 func (s *SessionContext) GetN3() net.IP {
 	return s.n3
+}
+
+// SetN3 sets the N3 addresses of the UPF, IPv4, IPv6 or both, that the core signals
+// in the UL tunnel of each PDU session. It is for tests, before any session.
+func (s *SessionContext) SetN3(addrs ...netip.Addr) {
+	s.n3Addrs = addrs
+	for _, addr := range addrs {
+		if addr.Is4() {
+			s.n3 = addr.AsSlice()
+		}
+	}
+}
+
+// GetN3Addrs returns the N3 addresses of the UPF.
+func (s *SessionContext) GetN3Addrs() []netip.Addr {
+	if s.n3Addrs != nil {
+		return s.n3Addrs
+	}
+	addr, _ := netip.AddrFromSlice(s.n3)
+	return []netip.Addr{addr.Unmap()}
 }
 
 func (s *SessionContext) GetDnnList() []string {

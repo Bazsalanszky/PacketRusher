@@ -47,7 +47,10 @@ type GNBContext struct {
 }
 
 type DataInfo struct {
-	gnbIpPort netip.AddrPort // gnb ip and port for data plane.
+	gnbIpPort    netip.AddrPort // gnb ip and port for data plane.
+	ipv6         netip.Addr     // its IPv6 address too, when the gNB is dual-stack on N3
+	preferIPv6   bool           // towards a UPF that signals both IP versions
+	advertiseAll bool           // signal every N3 address, not only the one in use
 }
 
 type Slice struct {
@@ -62,6 +65,7 @@ type ControlInfo struct {
 	gnbId          string
 	identity       config.GNBIdentity
 	gnbIpPort      netip.AddrPort
+	ipv6           netip.Addr // its IPv6 address too, when the gNB is dual-stack on N2
 	inboundChannel chan UEMessage
 	n2             atomic.Pointer[sctp.SCTPConn]
 	terminated     atomic.Bool
@@ -397,6 +401,113 @@ func (gnb *GNBContext) GetGnbIpPort() netip.AddrPort {
 func (gnb *GNBContext) SetGnbIpPort(n2, n3 netip.AddrPort) {
 	gnb.controlInfo.gnbIpPort = n2
 	gnb.dataInfo.gnbIpPort = n3
+}
+
+// SetInterfaces sets the N2 and N3 interfaces, with the IPv6 address of a dual-stack
+// one and how N3 chooses between IP versions.
+func (gnb *GNBContext) SetInterfaces(n2, n3 config.GnbInterface) {
+	gnb.SetGnbIpPort(n2.AddrPort, n3.AddrPort)
+	gnb.controlInfo.ipv6 = n2.IPv6
+	gnb.dataInfo.ipv6 = n3.IPv6
+	gnb.dataInfo.preferIPv6 = n3.PreferredFamily == config.IPv6
+	gnb.dataInfo.advertiseAll = n3.Advertise == config.AdvertiseAll
+}
+
+// ControlInterface is the N2 interface of the gNB.
+func (gnb *GNBContext) ControlInterface() config.GnbInterface {
+	return config.GnbInterface{IPv4Port: config.IPv4Port{AddrPort: gnb.controlInfo.gnbIpPort}, IPv6: gnb.controlInfo.ipv6}
+}
+
+// DataInterface is the N3 interface of the gNB.
+func (gnb *GNBContext) DataInterface() config.GnbInterface {
+	n3 := config.GnbInterface{IPv4Port: config.IPv4Port{AddrPort: gnb.dataInfo.gnbIpPort}, IPv6: gnb.dataInfo.ipv6}
+	if gnb.dataInfo.preferIPv6 {
+		n3.PreferredFamily = config.IPv6
+	}
+	if gnb.dataInfo.advertiseAll {
+		n3.Advertise = config.AdvertiseAll
+	}
+	return n3
+}
+
+// GetN2LocalFor returns the N2 address and port of the gNB of the IP version of the
+// AMF address amf, from which to reach it.
+func (gnb *GNBContext) GetN2LocalFor(amf netip.Addr) (netip.AddrPort, error) {
+	n2 := gnb.ControlInterface()
+	local, ok := n2.AddrOf(config.FamilyOf(amf))
+	if !ok {
+		return netip.AddrPort{}, fmt.Errorf("the AMF address %s is %s, but gnodeb.controlif (%s) has no %s address",
+			amf, config.FamilyOf(amf), n2, config.FamilyOf(amf))
+	}
+	return netip.AddrPortFrom(local, n2.Port()), nil
+}
+
+// GetN3LocalFor returns the N3 address of the gNB towards the UPF address upf: that
+// of its IP version, or the gNB's only one if it has none of that version.
+func (gnb *GNBContext) GetN3LocalFor(upf netip.Addr) netip.Addr {
+	if upf.IsValid() {
+		if local, ok := gnb.DataInterface().AddrOf(config.FamilyOf(upf)); ok {
+			return local
+		}
+	}
+	return gnb.GetN3GnbIp()
+}
+
+// GetN3LocalForSession is GetN3LocalFor the UPF of the PDU session, if any.
+func (gnb *GNBContext) GetN3LocalForSession(pduSession *GnbPDUSession) netip.Addr {
+	var upf netip.Addr
+	if pduSession != nil {
+		upf = pduSession.GetUpfAddr()
+	}
+	return gnb.GetN3LocalFor(upf)
+}
+
+// GetDownlinkAddrs returns what the gNB signals as its N3 address of a PDU session
+// whose UPF is upf: its address of the IP version used towards that UPF, or with
+// dataif.advertise "all" every address it has, which a dual-stack gNB signals in
+// 160 bits (TS 38.414 §5.1).
+func (gnb *GNBContext) GetDownlinkAddrs(upf netip.Addr) []netip.Addr {
+	if gnb.dataInfo.advertiseAll {
+		var addrs []netip.Addr
+		for _, addr := range []netip.Addr{gnb.dataInfo.gnbIpPort.Addr(), gnb.dataInfo.ipv6} {
+			if addr.IsValid() {
+				addrs = append(addrs, addr)
+			}
+		}
+		return addrs
+	}
+	return []netip.Addr{gnb.GetN3LocalFor(upf)}
+}
+
+// SelectUpfAddress returns the address of the UPF in its UL Transport Layer Address,
+// which TS 38.414 §5.1 lets carry an IPv4 address, an IPv6 one or both. Of both it
+// takes the one of dataif.preferredfamily, IPv4 by default, if the gNB has both IP
+// versions on N3; otherwise the one of the version the gNB has. A UPF of no version
+// the gNB has is still returned, with a warning: there may be no tunnel to set up.
+func (gnb *GNBContext) SelectUpfAddress(address *ngapType.TransportLayerAddress) (netip.Addr, error) {
+	v4, v6, err := ngapCodec.TransportAddresses(address)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	return selectUpfAddress(v4, v6, gnb.DataInterface()), nil
+}
+
+func selectUpfAddress(v4, v6 netip.Addr, n3 config.GnbInterface) netip.Addr {
+	usable4, usable6 := v4.IsValid() && n3.HasIPv4(), v6.IsValid() && n3.HasIPv6()
+	switch {
+	case usable4 && usable6 && n3.PreferredFamily == config.IPv6:
+		return v6
+	case usable4:
+		return v4
+	case usable6:
+		return v6
+	}
+	upf := v4
+	if !upf.IsValid() {
+		upf = v6
+	}
+	log.Warn("[GNB][NGAP] The UPF's N3 address ", upf, " is of an IP version gnodeb.dataif (", n3, ") does not have: GTP-U cannot reach it")
+	return upf
 }
 
 func (gnb *GNBContext) AddPagedUE(tmsi *ngapType.FiveGSTMSI) {

@@ -1,11 +1,13 @@
 # PacketRusher Simulated gNodeB Configuration
 gnodeb:
-  # IP Address on the N2 Interface (e.g. used between the gNodeB and the AMF)
+  # IP Address on the N2 Interface (e.g. used between the gNodeB and the AMF), IPv4
+  # or IPv6. See config-ipv6.yml and config-dual-stack.yml for IPv6 transport.
   controlif:
     ip: "127.0.0.1"
     port: 9487
 
-  # IP Address on the N3 Interface (e.g. used between the gNodeB and the UPF)
+  # IP Address on the N3 Interface (e.g. used between the gNodeB and the UPF), IPv4
+  # or IPv6
   dataif:
     ip: "127.0.0.1"
     port: 2152
@@ -89,7 +91,7 @@ ue:
     nea2: true
     nea3: false
 
-# List of AMF that PacketRusher will try to connect to
+# List of AMF that PacketRusher will try to connect to, IPv4 or IPv6
 amfif:
   - ip: "127.0.0.1"
     port: 38412

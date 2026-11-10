@@ -7,11 +7,14 @@ package config
 
 import (
 	"errors"
+	"net/netip"
 	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+var ipv4N3 = GnbInterface{IPv4Port: IPv4Port{netip.MustParseAddrPort("192.0.2.1:2152")}}
 
 func TestResolveTunnelBackend(t *testing.T) {
 	saved := slices.Clone(tunnelBackends)
@@ -43,7 +46,7 @@ func TestResolveTunnelBackend(t *testing.T) {
 		{"kernel", "", true, true, "", "unknown tunnel backend"},
 	} {
 		tunnelBackends[0].unavailable, tunnelBackends[1].unavailable = reason(tc.ebpf), reason(tc.gtp5g)
-		backend, err := ResolveTunnelBackend(tc.name, tc.session)
+		backend, err := ResolveTunnelBackend(tc.name, tc.session, ipv4N3)
 		require.Equal(t, tc.want, backend, "%+v", tc)
 		if tc.err == "" {
 			require.NoError(t, err)

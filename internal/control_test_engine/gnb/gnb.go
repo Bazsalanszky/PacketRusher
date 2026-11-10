@@ -47,6 +47,17 @@ func InitGnb(ctx stdcontext.Context, conf config.Config, wg *sync.WaitGroup) (*c
 		return nil, fmt.Errorf("invalid gNB identity: %w", err)
 	}
 
+	// gtp5g carries GTP-U over IPv4 only: a dual-stack gNB keeps IPv6 off N3 with it.
+	dataIF := conf.GNodeB.DataIF
+	if conf.Ue.TunnelMode != config.TunnelDisabled && conf.Ue.TunnelBackend == config.TunnelBackendGtp5g && dataIF.HasIPv6() {
+		if !dataIF.HasIPv4() {
+			return nil, fmt.Errorf("the gtp5g tunnel backend cannot carry GTP-U over IPv6, the only IP version of gnodeb.dataif")
+		}
+		log.Warn("[GNB] The gtp5g tunnel backend carries GTP-U over IPv4 only: N3 uses ", dataIF.Addr(), " and not ", dataIF.IPv6)
+		dataIF = dataIF.WithoutDualStack()
+	}
+	gnb.SetInterfaces(conf.GNodeB.ControlIF, dataIF)
+
 	const maxRetries = 5
 	const ngSetupTimeout = 2 * time.Second
 
@@ -55,7 +66,7 @@ func InitGnb(ctx stdcontext.Context, conf config.Config, wg *sync.WaitGroup) (*c
 	// start communication with AMF (server SCTP).
 	// Keep retry-consumed endpoints reserved across all AMF associations.
 	currentN2IP := conf.GNodeB.ControlIF
-	currentN3IP := conf.GNodeB.DataIF
+	currentN3IP := dataIF
 	for _, amfConfig := range conf.AMFs {
 		connected := false
 		var err error
@@ -71,7 +82,7 @@ func InitGnb(ctx stdcontext.Context, conf config.Config, wg *sync.WaitGroup) (*c
 			}
 
 			// Initialize/re-initialize gnb context with current IP
-			gnb.SetGnbIpPort(currentN2IP.AddrPort, currentN3IP.AddrPort)
+			gnb.SetInterfaces(currentN2IP, currentN3IP)
 
 			// new AMF context.
 			amf := gnb.NewGnBAmf(amfConfig.AddrPort)
@@ -185,6 +196,7 @@ func InitGnbForLoadSeconds(conf config.Config, wg *sync.WaitGroup,
 	if err := gnb.ConfigureIdentity(conf.GNodeB.PlmnList.GnbIDLength, conf.GNodeB.PlmnList.CellID); err != nil {
 		log.Fatalf("[GNB] Invalid identity: %v", err)
 	}
+	gnb.SetInterfaces(conf.GNodeB.ControlIF, conf.GNodeB.DataIF)
 
 	// start communication with AMF (server SCTP).
 	for _, amf := range conf.AMFs {
@@ -230,6 +242,7 @@ func InitGnbForAvaibility(conf config.Config,
 	if err := gnb.ConfigureIdentity(conf.GNodeB.PlmnList.GnbIDLength, conf.GNodeB.PlmnList.CellID); err != nil {
 		log.Fatalf("[GNB] Invalid identity: %v", err)
 	}
+	gnb.SetInterfaces(conf.GNodeB.ControlIF, conf.GNodeB.DataIF)
 
 	// start communication with AMF (server SCTP).
 	for _, amf := range conf.AMFs {

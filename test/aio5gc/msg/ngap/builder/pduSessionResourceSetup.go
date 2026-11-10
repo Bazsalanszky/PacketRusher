@@ -14,18 +14,18 @@ import (
 	codec "my5G-RANTester/lib/ngap"
 	"my5G-RANTester/test/aio5gc/context"
 	"my5G-RANTester/test/aio5gc/lib/convert"
-	"net"
+	"net/netip"
 )
 
 func PDUSessionResourceSetup(nas []byte, sm context.SmContext, ue *context.UEContext, session *context.SessionContext) ([]byte, error) {
-	msg, err := buildPDUSessionResourceSetupRequest(ue, sm, nas, session.GetN3())
+	msg, err := buildPDUSessionResourceSetupRequest(ue, sm, nas, session.GetN3Addrs())
 	if err != nil {
 		return nil, err
 	}
 	return msg.MarshalBinary()
 }
-func buildPDUSessionResourceSetupRequest(ue *context.UEContext, sm context.SmContext, nas []byte, ip net.IP) (*message.PDUSessionResourceSetupRequest, error) {
-	transfer, err := buildPDUSessionResourceSetuprequestTransfert(sm, ip)
+func buildPDUSessionResourceSetupRequest(ue *context.UEContext, sm context.SmContext, nas []byte, upf []netip.Addr) (*message.PDUSessionResourceSetupRequest, error) {
+	transfer, err := buildPDUSessionResourceSetuprequestTransfert(sm, upf)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +44,7 @@ func buildPDUSessionResourceSetupRequest(ue *context.UEContext, sm context.SmCon
 		PDUSessionResourceSetupListSUReq: &ie.PDUSessionResourceSetupListSUReq{List: []ie.PDUSessionResourceSetupItemSUReq{{PDUSessionID: &ie.PDUSessionID{Value: int64(sm.GetPduSessionId())}, SNSSAI: convert.SNSSAIToNGAP(sm.GetSnnsai()), PDUSessionNASPDU: &ie.NASPDU{Value: nas}, PDUSessionResourceSetupRequestTransfer: &octets}}},
 	}, nil
 }
-func buildPDUSessionResourceSetuprequestTransfert(sm context.SmContext, ip net.IP) ([]byte, error) {
+func buildPDUSessionResourceSetuprequestTransfert(sm context.SmContext, upf []netip.Addr) ([]byte, error) {
 	rule := sm.GetSessionRule()
 	if rule == nil || rule.AuthSessAmbr == nil || rule.AuthDefQos == nil {
 		return nil, fmt.Errorf("missing session QoS rule")
@@ -58,11 +58,15 @@ func buildPDUSessionResourceSetuprequestTransfert(sm context.SmContext, ip net.I
 	if err != nil {
 		return nil, err
 	}
+	address, err := codec.TransportLayerAddress(upf...)
+	if err != nil {
+		return nil, err
+	}
 	teid := make([]byte, 4)
 	binary.BigEndian.PutUint32(teid, 1)
 	transfer := &ie.PDUSessionResourceSetupRequestTransfer{ProtocolIEs: &ie.ProtocolIEContainerPDUSessionResourceSetupRequestTransferIEs{List: []ie.PDUSessionResourceSetupRequestTransferIEs{
 		{PDUSessionAggregateMaximumBitRate: &ie.PDUSessionAggregateMaximumBitRate{PDUSessionAggregateMaximumBitRateUL: &ie.BitRate{Value: ul}, PDUSessionAggregateMaximumBitRateDL: &ie.BitRate{Value: dl}}},
-		{ULNGUUPTNLInformation: &ie.UPTransportLayerInformation{Choice: &ie.GTPTunnel{TransportLayerAddress: &ie.TransportLayerAddress{Value: aper.BitString{Bytes: ip.To4(), BitLength: 32}}, GTPTEID: &ie.GTPTEID{Value: teid}}}},
+		{ULNGUUPTNLInformation: &ie.UPTransportLayerInformation{Choice: &ie.GTPTunnel{TransportLayerAddress: address, GTPTEID: &ie.GTPTEID{Value: teid}}}},
 		{PDUSessionType: &ie.PDUSessionType{Value: ie.PDUSessionTypePresentIpv4}},
 		{QosFlowSetupRequestList: &ie.QosFlowSetupRequestList{List: []ie.QosFlowSetupRequestItem{{
 			QosFlowIdentifier: &ie.QosFlowIdentifier{Value: int64(sm.GetDefQosQFI())},
