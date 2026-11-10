@@ -2,6 +2,7 @@ package ngap
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net/netip"
 
@@ -34,8 +35,12 @@ func Unmarshal(payload any, value interface{ Read(*aper.PerBitData) error }) err
 	}
 	return value.Read(aper.NewPerBitData(data))
 }
+
+// IPAddressToNgap encodes an IPv4 address, an IPv6 address or both, as
+// TransportLayerAddress does. It returns nil if an address does not parse or is not
+// of its version.
 func IPAddressToNgap(ipv4, ipv6 string) *ie.TransportLayerAddress {
-	var encoded []byte
+	var addrs []netip.Addr
 	for _, text := range []string{ipv4, ipv6} {
 		if text == "" {
 			continue
@@ -44,31 +49,101 @@ func IPAddressToNgap(ipv4, ipv6 string) *ie.TransportLayerAddress {
 		if err != nil {
 			return nil
 		}
-		encoded = append(encoded, addr.AsSlice()...)
+		addrs = append(addrs, addr)
 	}
-	return &ie.TransportLayerAddress{Value: aper.BitString{Bytes: encoded, BitLength: uint64(len(encoded) * 8)}}
+	if len(addrs) == 2 && (!addrs[0].Unmap().Is4() || !addrs[1].Is6() || addrs[1].Is4In6()) {
+		return nil // Each must be of its own IP version.
+	}
+	address, err := TransportLayerAddress(addrs...)
+	if err != nil {
+		return nil
+	}
+	return address
 }
+
+// IPAddressToString decodes a Transport Layer Address into its IPv4 and IPv6
+// addresses, either of which is empty if it is absent; both are if it is malformed.
 func IPAddressToString(address *ie.TransportLayerAddress) (string, string) {
-	if address == nil {
+	v4, v6, err := TransportAddresses(address)
+	if err != nil {
 		return "", ""
 	}
-	data := address.Value.Bytes
-	var v4, v6 string
-	if len(data) == 4 || len(data) == 20 {
-		addr, ok := netip.AddrFromSlice(data[:4])
-		if ok {
-			v4 = addr.String()
-		}
-		data = data[4:]
+	var ipv4, ipv6 string
+	if v4.IsValid() {
+		ipv4 = v4.String()
 	}
-	if len(data) == 16 {
-		addr, ok := netip.AddrFromSlice(data)
-		if ok {
-			v6 = addr.String()
-		}
+	if v6.IsValid() {
+		ipv6 = v6.String()
 	}
-	return v4, v6
+	return ipv4, ipv6
 }
+
+// TransportLayerAddress encodes the addresses of a node as TS 38.414 §5.1 lays out a
+// Transport Layer Address: 32 bits for an IPv4 address, 128 for an IPv6 one, and 160
+// for both, the IPv4 address first. Their order in addrs does not matter; an
+// IPv4-mapped IPv6 address counts as IPv4, and a zone is dropped.
+func TransportLayerAddress(addrs ...netip.Addr) (*ie.TransportLayerAddress, error) {
+	var v4, v6 netip.Addr
+	for _, addr := range addrs {
+		addr = addr.Unmap().WithZone("")
+		switch {
+		case !addr.IsValid() || addr.IsUnspecified():
+			return nil, fmt.Errorf("invalid transport layer address %q", addr)
+		case addr.Is4() && !v4.IsValid():
+			v4 = addr
+		case addr.Is6() && !v6.IsValid():
+			v6 = addr
+		default:
+			return nil, fmt.Errorf("transport layer address with two addresses of the version of %s", addr)
+		}
+	}
+	var encoded []byte
+	if v4.IsValid() {
+		encoded = v4.AsSlice()
+	}
+	if v6.IsValid() {
+		encoded = append(encoded, v6.AsSlice()...)
+	}
+	if len(encoded) == 0 {
+		return nil, errors.New("transport layer address without an address")
+	}
+	return &ie.TransportLayerAddress{Value: aper.BitString{Bytes: encoded, BitLength: uint64(len(encoded) * 8)}}, nil
+}
+
+// TransportAddresses decodes a Transport Layer Address (TS 38.414 §5.1) into its
+// IPv4 address, its IPv6 address, or both: either is invalid if absent. It accepts
+// only the 32, 128 and 160 bits of the specification, in as many bytes, and rejects
+// unspecified addresses. An IPv4-mapped address in 128 bits counts as IPv4.
+func TransportAddresses(address *ie.TransportLayerAddress) (v4, v6 netip.Addr, err error) {
+	if address == nil {
+		return v4, v6, errors.New("missing transport layer address")
+	}
+	data, bits := address.Value.Bytes, address.Value.BitLength
+	if uint64(len(data))*8 != bits {
+		return v4, v6, fmt.Errorf("transport layer address of %d bits in %d bytes", bits, len(data))
+	}
+	switch bits {
+	case 32:
+		v4 = netip.AddrFrom4([4]byte(data))
+	case 128:
+		v6 = netip.AddrFrom16([16]byte(data))
+		if v6.Is4In6() {
+			v4, v6 = v6.Unmap(), netip.Addr{}
+		}
+	case 160:
+		v4, v6 = netip.AddrFrom4([4]byte(data[:4])), netip.AddrFrom16([16]byte(data[4:]))
+		if v6.Is4In6() {
+			return netip.Addr{}, netip.Addr{}, fmt.Errorf("transport layer address with an IPv4-mapped IPv6 address %s", v6)
+		}
+	default:
+		return v4, v6, fmt.Errorf("transport layer address of %d bits: neither IPv4 (32), IPv6 (128) nor both (160)", bits)
+	}
+	if v4.IsUnspecified() || v6.IsUnspecified() {
+		return netip.Addr{}, netip.Addr{}, errors.New("transport layer address with an unspecified address")
+	}
+	return v4, v6, nil
+}
+
 func Tunnel(value *ie.UPTransportLayerInformation) (*ie.GTPTunnel, error) {
 	if value == nil {
 		return nil, fmt.Errorf("missing UP transport information")
@@ -80,11 +155,21 @@ func Tunnel(value *ie.UPTransportLayerInformation) (*ie.GTPTunnel, error) {
 	return tunnel, nil
 }
 
+// UPTransport is the GTP tunnel of teid at the address ip, IPv4 or IPv6.
 func UPTransport(ip netip.Addr, teid uint32) *ie.UPTransportLayerInformation {
+	return GTPTunnel(teid, ip)
+}
+
+// GTPTunnel is the GTP tunnel of teid at addrs, an IPv4 address, an IPv6 one or
+// both, as TransportLayerAddress encodes them. Invalid addresses leave the tunnel
+// without an address, which its encoding then rejects: the codec would otherwise
+// encode an empty one.
+func GTPTunnel(teid uint32, addrs ...netip.Addr) *ie.UPTransportLayerInformation {
 	value := make([]byte, 4)
 	binary.BigEndian.PutUint32(value, teid)
+	address, _ := TransportLayerAddress(addrs...) // nil on error
 	return &ie.UPTransportLayerInformation{Choice: &ie.GTPTunnel{
-		TransportLayerAddress: IPAddressToNgap(ip.String(), ""),
+		TransportLayerAddress: address,
 		GTPTEID:               &ie.GTPTEID{Value: value},
 	}}
 }
