@@ -149,6 +149,10 @@ host, devices and routing rules, is removed by the next run of the same UEs.
 
 The IPv6 user plane needs the `ebpf` or `userspace` tunnel backend: `auto` selects one of them for `IPv6`, whereas on `gtp5g` an `IPv4v6` session carries IPv4 only.
 The SMF only allocates an interface identifier: the UE sends a Router Solicitation through its tunnel, and takes its address in the /64 prefix of the Router Advertisement with which the UPF, or the SMF through it, answers. PacketRusher then logs the address to bind to.
+It solicits three times, 4 s apart, then ever less often, up to once a minute, until a Router Advertisement comes (RFC 4861, RFC 7559).
+It takes one only from a link-local address, with hop limit 255 and a correct checksum, and the first Prefix Information option of a /64 with the autonomous flag set and lifetimes that make sense (RFC 4861 §6.1.2, RFC 4862 §5.5.3); the on-link flag, which 3GPP networks clear, does not matter.
+The log says why it ignores any other.
+With a tunnel, a PDU session with an IPv6 half counts as active on the control socket once the UE has that address (except on `gtp5g`).
 
 ```bash
 # config.yml: "pdusessiontype: IPv4v6" under "ue:"
@@ -190,7 +194,9 @@ sudo ./packetrusher --config config/config-ipv6.yml --tunnel-backend userspace u
 
 The actions are `inspect` (the default, of all the UEs without `--ue`), `wait` (until registered with its PDU
 sessions), `idle`, `reconnect`, `xn-handover` and `ng-handover` (to the `--target` gNB ID), `deregister` and
-`register`. `run-scenario` runs them in order from a JSON file, each step once the previous one completed:
+`register`. The state of a UE lists its active PDU sessions and, in `addresses`, the `ipv4` and `ipv6` address of
+each, for instance `jq -r '.ues[0].addresses[0].ipv6'`. An IPv6 address is the link-local one of the SMF's interface
+identifier until the UE has its address in the advertised prefix. `run-scenario` runs them in order from a JSON file, each step once the previous one completed:
 
 ```json
 {"steps": [
