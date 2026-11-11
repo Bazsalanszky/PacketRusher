@@ -16,6 +16,7 @@ import (
 	"my5G-RANTester/test/aio5gc/context"
 	amfTools "my5G-RANTester/test/aio5gc/lib/tools"
 	"net/netip"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -127,12 +128,20 @@ func TestIPv6Transport(t *testing.T) {
 				return analytics.Results()[analytics.SessionEstablishment].Success-before[analytics.SessionEstablishment].Success == 1
 			}, 15*time.Second, 10*time.Millisecond, "the UE must accept its PDU session")
 
-			mu.Lock()
-			require.Len(t, downlinks, 1)
+			// The gNB hands the UE its PDU Session Establishment Accept before it sends
+			// the core its PDU Session Resource Setup Response: the UE may well accept
+			// first. The hook must not wait for the lock while a failed check holds it.
+			received := func() []*ngapType.TransportLayerAddress {
+				mu.Lock()
+				defer mu.Unlock()
+				return slices.Clone(downlinks)
+			}
+			require.Eventually(t, func() bool { return len(received()) != 0 }, 5*time.Second, 10*time.Millisecond,
+				"the core must receive the PDU Session Resource Setup Response")
+			require.Len(t, received(), 1)
 			want, err := codec.TransportLayerAddress(tc.wantDL...)
 			require.NoError(t, err)
-			require.Equal(t, want.Value, downlinks[0].Value, "the gNB's N3 address")
-			mu.Unlock()
+			require.Equal(t, want.Value, received()[0].Value, "the gNB's N3 address")
 
 			for _, gnb := range gnbs {
 				sessions := 0
