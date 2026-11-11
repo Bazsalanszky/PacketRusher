@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -148,4 +149,14 @@ func TestRouterAdvertisementValidation(t *testing.T) {
 	}, lab)
 	_, _, err = routerAdvertisement(odd)
 	require.ErrorContains(t, err, "malformed option") // the checksum passed
+}
+
+// RFC 4861's three solicitations 4 s apart, then RFC 7559's backoff, capped.
+func TestSolicitationDelay(t *testing.T) {
+	var delays []time.Duration
+	for n := 1; n <= 9; n++ {
+		delays = append(delays, solicitationDelay(n))
+	}
+	s := time.Second
+	require.Equal(t, []time.Duration{4 * s, 4 * s, 4 * s, 8 * s, 16 * s, 32 * s, 60 * s, 60 * s, 60 * s}, delays)
 }

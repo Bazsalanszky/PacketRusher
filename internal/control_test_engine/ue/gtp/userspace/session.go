@@ -205,27 +205,55 @@ func (c *Config) belongs(packet []byte, ipv4, ipv6 int) bool {
 	return len(packet) >= 20 && packet[0]>>4 == 4 && netip.AddrFrom4([4]byte(packet[ipv4:ipv4+4])) == c.UE
 }
 
+// The Router Solicitations of a UE are RTR_SOLICITATION_INTERVAL apart, as many
+// as MAX_RTR_SOLICITATIONS (RFC 4861 §10). Then the interval doubles up to
+// maxSolicitationInterval, as RFC 7559 has hosts go on. Its 3600 s suit a phone,
+// not a test, which wants a late answer of the network within its run.
+var (
+	solicitationInterval    = 4 * time.Second
+	maxSolicitationInterval = time.Minute
+)
+
+const maxRtrSolicitations = 3
+
+// solicitationDelay is how long the UE waits for an answer to its n-th solicitation.
+func solicitationDelay(n int) time.Duration {
+	delay := solicitationInterval
+	for ; n > maxRtrSolicitations && delay < maxSolicitationInterval; n-- {
+		delay *= 2
+	}
+	return min(delay, maxSolicitationInterval)
+}
+
 // Solicit asks the UPF, from the UE's link-local address, for the /64 prefix of its
-// PDU session (TS 23.501 §5.8.2.2.3) and returns the UE's address in that prefix.
+// PDU session (TS 23.501 §5.8.2.2) and returns the UE's address in that prefix,
+// made of the interface identifier of linkLocal, which the SMF allocated. It keeps
+// asking until it has one or the session is closed.
 func (s *Session) Solicit(linkLocal netip.Addr) (netip.Addr, error) {
-	for range 3 { // RFC 4861 §10: MAX_RTR_SOLICITATIONS, RTR_SOLICITATION_INTERVAL
+	for n := 1; ; n++ {
 		c := s.config.Load()
 		datagram := Encode(routerSolicitation(linkLocal), c.UplinkTEID, c.QFI)
 		if _, err := s.endpoint.conn.WriteToUDPAddrPort(datagram, netip.AddrPortFrom(c.UPF, 2152)); err != nil {
 			return netip.Addr{}, err
 		}
+		timer := time.NewTimer(solicitationDelay(n))
 		select {
 		case ra := <-s.advertisements:
+			timer.Stop()
 			log.Info("[UE][GTP] ", s.name, ": Router Advertisement: ", ra)
 			address, identifier := ra.prefix.Addr().As16(), linkLocal.As16()
 			copy(address[8:], identifier[8:])
 			return netip.AddrFrom16(address), nil
 		case <-s.done:
+			timer.Stop()
 			return netip.Addr{}, net.ErrClosed
-		case <-time.After(4 * time.Second):
+		case <-timer.C:
+		}
+		if n == maxRtrSolicitations {
+			log.Warn("[UE][GTP] ", s.name, ": the UPF advertised no IPv6 /64 prefix in answer to ", n,
+				" Router Solicitations; soliciting again, at most every ", maxSolicitationInterval)
 		}
 	}
-	return netip.Addr{}, errors.New("the UPF advertised no IPv6 /64 prefix")
 }
 
 // warn logs the first datapath error of a session that is not being closed.
