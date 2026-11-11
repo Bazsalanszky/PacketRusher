@@ -299,11 +299,25 @@ func (ue *UEContext) ReportStatus(request *procedures.ControlRequest) {
 		// With tunnels, a session is usable once its interface exists, and only
 		// the first session of a UE gets one.
 		if err == nil && pduSession.GetStateSM() == SM5G_PDU_SESSION_ACTIVE &&
-			(ue.TunnelMode == config.TunnelDisabled || id != 1 || pduSession.Tunnel != nil) {
+			(ue.TunnelMode == config.TunnelDisabled || id != 1 || pduSession.Tunnel != nil && ue.hasIPv6(pduSession)) {
 			status.PduSessions = append(status.PduSessions, int(id))
+			addresses := procedures.PduSessionAddresses{PduSession: int(id), IPv4: pduSession.GetIp()}
+			if ipv6 := pduSession.GetIPv6(); ipv6.IsValid() {
+				addresses.IPv6 = ipv6.String()
+			}
+			status.Addresses = append(status.Addresses, addresses)
 		}
 	}
 	ue.scenarioChan <- scenario.ScenarioMessage{Control: request, Status: status}
+}
+
+// hasIPv6 reports whether the tunnel of a PDU session has its IPv6 address, if the
+// session has one: the address in the prefix the network advertises on the user
+// plane, which follows the setup of the tunnel. gtp5g carries only the IPv4 half of
+// an IPv4v6 session, and its IPv6 half never gets an address.
+func (ue *UEContext) hasIPv6(pduSession *UEPDUSession) bool {
+	ipv6 := pduSession.GetIPv6()
+	return !ipv6.IsValid() || !ipv6.IsLinkLocalUnicast() || ue.TunnelBackend == config.TunnelBackendGtp5g
 }
 
 func (ue *UEContext) SetGnbInboundChannel(gnbInboundChannel chan context.UEMessage) {

@@ -8,7 +8,9 @@ package context
 import (
 	"my5G-RANTester/config"
 	gnbContext "my5G-RANTester/internal/control_test_engine/gnb/context"
+	"my5G-RANTester/internal/control_test_engine/procedures"
 	"my5G-RANTester/internal/control_test_engine/ue/scenario"
+	"net/netip"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -82,4 +84,56 @@ func TestReportStatusWaitsForTunnel(t *testing.T) {
 	status := (<-scenarioChan).Status
 	require.Equal(t, []int{1, 2}, status.PduSessions)
 	require.True(t, status.Ready)
+}
+
+// A session with an IPv6 half is usable once the UE has its address in the prefix
+// that the network advertises after the tunnel is set up, except on gtp5g, which
+// only carries the IPv4 half. The status reports the addresses of the sessions. (Its
+// scenario then completes Ready with the number of usable sessions.)
+func TestReportStatusWaitsForIPv6(t *testing.T) {
+	linkLocal, global := netip.MustParseAddr("fe80::7"), netip.MustParseAddr("2a0e:8f02:f07b:500::7")
+	for name, tc := range map[string]struct {
+		backend config.TunnelBackend
+		mode    config.TunnelMode
+		ipv4    bool
+		waits   bool
+	}{
+		"IPv6, userspace":      {config.TunnelBackendUserspace, config.TunnelTun, false, true},
+		"IPv4v6, userspace":    {config.TunnelBackendUserspace, config.TunnelTun, true, true},
+		"IPv6, eBPF VRF":       {config.TunnelBackendEBPF, config.TunnelVrf, false, true},
+		"IPv4v6, gtp5g":        {config.TunnelBackendGtp5g, config.TunnelTun, true, false},
+		"IPv4v6, gtp5g shared": {config.TunnelBackendGtp5g, config.TunnelShared, true, false},
+		"IPv6, no tunnel":      {"", config.TunnelDisabled, false, false},
+	} {
+		scenarioChan := make(chan scenario.ScenarioMessage, 1)
+		ue := &UEContext{scenarioChan: scenarioChan, StateMM: MM5G_REGISTERED, TunnelMode: tc.mode, TunnelBackend: tc.backend, gnbTx: make(chan gnbContext.UEMessage)}
+		pduSession, err := ue.CreatePDUSession()
+		require.NoError(t, err)
+		pduSession.SetStateSM_PDU_SESSION_ACTIVE()
+		want := procedures.PduSessionAddresses{PduSession: 1, IPv6: linkLocal.String()}
+		if tc.ipv4 {
+			pduSession.SetIp([12]uint8{172, 250, 0, 5})
+			want.IPv4 = "172.250.0.5"
+		}
+		pduSession.SetIPv6(linkLocal)
+		if tc.mode != config.TunnelDisabled {
+			pduSession.Tunnel = testTunnel{}
+		}
+		ue.ReportStatus(nil)
+		status := (<-scenarioChan).Status
+		if tc.waits {
+			require.Empty(t, status.PduSessions, name)
+			require.Empty(t, status.Addresses, name)
+		} else {
+			require.Equal(t, []int{1}, status.PduSessions, name)
+			require.Equal(t, []procedures.PduSessionAddresses{want}, status.Addresses, name)
+		}
+
+		pduSession.SetIPv6(global) // The UPF advertised the prefix.
+		want.IPv6 = global.String()
+		ue.ReportStatus(nil)
+		status = (<-scenarioChan).Status
+		require.Equal(t, []int{1}, status.PduSessions, name)
+		require.Equal(t, []procedures.PduSessionAddresses{want}, status.Addresses, name)
+	}
 }

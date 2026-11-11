@@ -28,13 +28,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// startControlTest starts a UE on the first of two gNBs, and returns the control
-// socket of the test. The mock core has no handover: it only acknowledges a Path
-// Switch Request, and keeps finding the UE as both gNBs give it the same RAN UE
-// NGAP ID.
-func startControlTest(t *testing.T, n2, n3, amf string) (string, *context.Aio5gc) {
+// startControlTest starts a UE on the first of two gNBs, with the default
+// configuration but for edits, and returns the control socket of the test. The
+// mock core has no handover: it only acknowledges a Path Switch Request, and keeps
+// finding the UE as both gNBs give it the same RAN UE NGAP ID.
+func startControlTest(t *testing.T, n2, n3, amf string, edits ...func(*config.Config)) (string, *context.Aio5gc) {
 	conf := amfTools.GenerateDefaultConf(netip.MustParseAddrPort(n2), netip.MustParseAddrPort(n3),
 		[]*config.AMF{{IPv4Port: config.IPv4Port{AddrPort: netip.MustParseAddrPort(amf)}}})
+	for _, edit := range edits {
+		edit(&conf)
+	}
 	builder := aio5gc.FiveGCBuilder{}
 	fiveGC, err := builder.WithConfig(conf).WithNGAPDispatcherHook(func(message ngap.Message, gnb *context.GNBContext, fiveGC *context.Aio5gc) (bool, error) {
 		request, ok := message.(*ngap.PathSwitchRequest)
@@ -90,6 +93,20 @@ func registered(gnbId string) procedures.UeStatus {
 	return procedures.UeStatus{UeId: 1, State: "registered", GnbId: gnbId, Connected: true, Ready: true, PduSessions: []int{1, 2}}
 }
 
+// withoutAddresses checks that the status has an IPv4 address, which the mock core
+// allocates, for each active PDU session, and returns it without them.
+func withoutAddresses(t *testing.T, status procedures.UeStatus) procedures.UeStatus {
+	t.Helper()
+	require.Len(t, status.Addresses, len(status.PduSessions))
+	for i, addresses := range status.Addresses {
+		require.Equal(t, status.PduSessions[i], addresses.PduSession)
+		require.True(t, netip.MustParseAddr(addresses.IPv4).Is4())
+		require.Empty(t, addresses.IPv6)
+	}
+	status.Addresses = nil
+	return status
+}
+
 func TestControlSocket(t *testing.T) {
 	socket, fiveGC := startControlTest(t, "127.0.0.1:9491", "127.0.0.1:2156", "127.0.0.1:38416")
 
@@ -100,7 +117,7 @@ func TestControlSocket(t *testing.T) {
 
 	response, err = control.Call(socket, control.Request{UeId: 1, Action: "wait"})
 	require.NoError(t, err)
-	require.Equal(t, registered("000008"), response.Ues[0])
+	require.Equal(t, registered("000008"), withoutAddresses(t, response.Ues[0]))
 
 	// Actions the UE is not in a state for are refused, and leave it as it was.
 	for _, refused := range []control.Request{
@@ -116,7 +133,7 @@ func TestControlSocket(t *testing.T) {
 
 	response, err = control.Call(socket, control.Request{UeId: 1, Action: "xn-handover", Target: "000009"})
 	require.NoError(t, err)
-	require.Equal(t, registered("000009"), response.Ues[0])
+	require.Equal(t, registered("000009"), withoutAddresses(t, response.Ues[0]))
 
 	response, err = control.Call(socket, control.Request{UeId: 1, Action: "deregister"})
 	require.NoError(t, err)
@@ -149,7 +166,7 @@ func TestRunScenario(t *testing.T) {
 	]}`))
 	response, err := control.Call(socket, control.Request{UeId: 1, Action: "inspect"})
 	require.NoError(t, err)
-	require.Equal(t, registered("000008"), response.Ues[0])
+	require.Equal(t, registered("000008"), withoutAddresses(t, response.Ues[0]))
 
 	// A scenario stops at its first failing step, and runs none when one is invalid.
 	require.ErrorContains(t, run(`{"steps": [{"ue": 1, "action": "reconnect"}, {"ue": 1, "action": "deregister"}]}`), "step 1")

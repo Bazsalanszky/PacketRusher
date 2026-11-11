@@ -49,7 +49,18 @@ type UeStatus struct {
 	Connected   bool   `json:"connected"`
 	Ready       bool   `json:"ready"`
 	PduSessions []int  `json:"active_pdu_sessions"`
+	// Addresses are those of the UE in its active PDU sessions, in the same order.
+	Addresses []PduSessionAddresses `json:"addresses,omitempty"`
 	// The UE only knows the channel of its gNB. Its scenario names that gNB, and
 	// completes Ready with the number of PDU sessions it requested.
 	GnbInboundChannel chan context.UEMessage `json:"-"`
+}
+
+// PduSessionAddresses are the addresses of the UE in one of its PDU sessions.
+type PduSessionAddresses struct {
+	PduSession int    `json:"pdu_session"`
+	IPv4       string `json:"ipv4,omitempty"`
+	// IPv6 is the address in the /64 prefix the network advertised, or until then
+	// the link-local address of the interface identifier the SMF allocated.
+	IPv6 string `json:"ipv6,omitempty"`
 }
