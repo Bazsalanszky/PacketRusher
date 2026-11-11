@@ -145,7 +145,7 @@ host, devices and routing rules, is removed by the next run of the same UEs.
 
 ### IPv6 and dual-stack PDU sessions
 
-`ue.pdusessiontype` in the configuration file is the type of the PDU sessions the UEs request: `IPv4` (default), `IPv6` or `IPv4v6`.
+`ue.pdusessiontype` in the configuration file is the type of the PDU sessions the UEs request: `IPv4` (default), `IPv6` or `IPv4v6`. `Ethernet` requests an Ethernet PDU session, only to test how the network answers one: the UE has no Ethernet datapath.
 
 The IPv6 user plane needs the `ebpf` or `userspace` tunnel backend: `auto` selects one of them for `IPv6`, whereas on `gtp5g` an `IPv4v6` session carries IPv4 only.
 The SMF only allocates an interface identifier: the UE sends a Router Solicitation through its tunnel, and takes its address in the /64 prefix of the Router Advertisement with which the UPF, or the SMF through it, answers. PacketRusher then logs the address to bind to.

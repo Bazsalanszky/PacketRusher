@@ -55,6 +55,10 @@ const (
 	PDUSessionIPv4   PDUSessionType = "IPv4"
 	PDUSessionIPv6   PDUSessionType = "IPv6"
 	PDUSessionIPv4v6 PDUSessionType = "IPv4v6"
+	// PDUSessionEthernet requests an Ethernet PDU session, to test how a network answers one
+	// (for example an SMF that supports IP sessions only refuses it with 5GSM cause #28). The UE
+	// has no Ethernet datapath: an accepted Ethernet session gets no tunnel.
+	PDUSessionEthernet PDUSessionType = "Ethernet"
 )
 
 // pduSessionTypes gives the NAS value of each type (TS 24.501 §9.11.4.11); IPv4 is
@@ -62,6 +66,7 @@ const (
 var pduSessionTypes = map[PDUSessionType]uint8{
 	"": nasType.PDUSessType_IPv4, PDUSessionIPv4: nasType.PDUSessType_IPv4,
 	PDUSessionIPv6: nasType.PDUSessType_IPv6, PDUSessionIPv4v6: nasType.PDUSessType_IPv4v6,
+	PDUSessionEthernet: nasType.PDUSessType_Ethernet,
 }
 
 func (t PDUSessionType) NAS() uint8 {
@@ -161,7 +166,8 @@ type Ue struct {
 	TunnelMode             TunnelMode `yaml:"-"`
 	TunnelMTU              int        `yaml:"tunnelmtu"`
 
-	// PDUSessionType is IPv4 (the default), IPv6 or IPv4v6.
+	// PDUSessionType is IPv4 (the default), IPv6 or IPv4v6; Ethernet only to test a network's
+	// answer to an Ethernet request.
 	PDUSessionType PDUSessionType `yaml:"pdusessiontype"`
 
 	// TunnelBackend is resolved from --tunnel-backend when a tunnel is requested.
@@ -236,7 +242,7 @@ func readConfig(configPath string) Config {
 	}
 
 	if _, known := pduSessionTypes[cfg.Ue.PDUSessionType]; !known {
-		log.Fatal("ue.pdusessiontype must be IPv4, IPv6 or IPv4v6")
+		log.Fatal("ue.pdusessiontype must be IPv4, IPv6, IPv4v6 or Ethernet")
 	}
 
 	if cfg.Ue.TunnelMTU < 0 {
