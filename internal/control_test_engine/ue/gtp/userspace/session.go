@@ -37,7 +37,8 @@ type Session struct {
 	config   atomic.Pointer[Config]
 	done     chan struct{}
 	warned   sync.Once
-	prefixes chan netip.Prefix // from the UPF's Router Advertisements
+	// advertisements are the valid Router Advertisements of the UPF, for Solicit.
+	advertisements chan advertisement
 }
 
 // endpoint is the socket of one N3 address, shared by the UEs of that gNB.
@@ -63,7 +64,7 @@ func Open(name string, local netip.Addr, c Config) (*Session, error) {
 	if err := netlink.LinkAdd(tun); err != nil {
 		return nil, err
 	}
-	s := &Session{name: name, tun: tun.Fds[0], done: make(chan struct{}), prefixes: make(chan netip.Prefix, 1)}
+	s := &Session{name: name, tun: tun.Fds[0], done: make(chan struct{}), advertisements: make(chan advertisement, 1)}
 	s.config.Store(&c)
 	if err := netlink.LinkSetUp(tun); err != nil {
 		s.tun.Close()
@@ -175,12 +176,14 @@ func (e *endpoint) receive() {
 		}
 		// A Router Advertisement is for Solicit, not for the kernel, which would
 		// autoconfigure the device outside of the UE's routing table.
-		if prefix, advertisement := advertisedPrefix(packet); advertisement {
-			if prefix.IsValid() {
-				select {
-				case s.prefixes <- prefix:
-				default:
-				}
+		if ra, isAdvertisement, err := routerAdvertisement(packet); isAdvertisement {
+			if err != nil {
+				log.Warn("[UE][GTP] ", s.name, ": ignoring a Router Advertisement: ", err)
+				continue
+			}
+			select {
+			case s.advertisements <- ra:
+			default:
 			}
 			continue
 		}
@@ -212,8 +215,9 @@ func (s *Session) Solicit(linkLocal netip.Addr) (netip.Addr, error) {
 			return netip.Addr{}, err
 		}
 		select {
-		case prefix := <-s.prefixes:
-			address, identifier := prefix.Addr().As16(), linkLocal.As16()
+		case ra := <-s.advertisements:
+			log.Info("[UE][GTP] ", s.name, ": Router Advertisement: ", ra)
+			address, identifier := ra.prefix.Addr().As16(), linkLocal.As16()
 			copy(address[8:], identifier[8:])
 			return netip.AddrFrom16(address), nil
 		case <-s.done:
